@@ -104,6 +104,18 @@ def parse_request_params(logfile):
             yield url, time
 
 
+def get_mediane(values):
+    values.sort()
+    len_ = len(values)
+    if len_ % 2 == 0:
+        mid_index_1 = len_ // 2
+        mid_index_2 = mid_index_1 - 1
+        return (values[mid_index_1] + values[mid_index_2]) / 2
+    else:
+        mid_index = len_ // 2
+        return values[mid_index]
+
+
 def get_table_json(logfile):
     data = {}
     count_total_req = 0
@@ -112,11 +124,14 @@ def get_table_json(logfile):
         count_total_req += 1
         request_time_sum += time
         if url not in data:
-            data[url] = {"count": 1, "time_sum": time, "time_max": time, "url": url}
+            data[url] = {
+                "count": 1, "time_sum": time, "time_max": time, "url": url, "values": [time]
+            }
         else:
             data_url = data[url]
             data_url["count"] += 1
             data_url["time_sum"] += time
+            data_url["values"].append(time)
             if time > data_url["time_max"]:
                 data_url["time_max"] = time
 
@@ -129,6 +144,8 @@ def get_table_json(logfile):
         val["time_perc"] = round(time_perc, ndigits=3)
         time_avg = val["time_sum"] / val["count"]
         val["time_avg"] = round(time_avg, ndigits=3)
+        val["time_med"] = round(get_mediane(val["values"]), ndigits=3)
+        del val["values"]
         result.append(val)
 
     return result
