@@ -80,7 +80,7 @@ class TestLatestLogFile(unittest.TestCase):
     empty_log_dir = "/tmp/log_analyzer/empty"
     log_dir = "/tmp/log_analyzer/log_dir"
 
-    valid_formats = ["gz", ".og"]
+    valid_formats = ["gz", "log"]
     log_map = {}
 
     @staticmethod
@@ -98,15 +98,17 @@ class TestLatestLogFile(unittest.TestCase):
     #     year, month, day = int(date_str[:4]), int(date_str[4:6]), int(date_str[6:])
     #     return datetime.date(year=year, month=month, day=day)
 
-    def _create_logs(self, count=10, log_type="ui", log_format=None):
+    def _create_logs(self, count=10, log_type="ui", is_gz=False):
         for _ in range(count):
             date = self._get_random_datetime()
             month = f"{date.month}" if date.month >= 10 else f"0{date.month}"
             day = f"{date.day}" if date.day >= 10 else f"0{date.day}"
-            name = f"nginx-access-{log_type}.log-{date.year}{month}{day}{log_format}"
+            name = f"nginx-access-{log_type}.log-{date.year}{month}{day}"
+            if is_gz:
+                name += ".gz"
             self.log_map[date] = name
             path = os.path.join(self.log_dir, name)
-            if log_format == "gz":
+            if is_gz:
                 with gzip.open(path, "wb") as f:
                     f.write(b"some content")
             else:
@@ -118,8 +120,9 @@ class TestLatestLogFile(unittest.TestCase):
             if os.path.exists(dir_):
                 shutil.rmtree(dir_)
 
-        os.makedirs(self.empty_log_dir)
-        os.makedirs(self.log_dir)
+        for dir_ in self.empty_log_dir, self.log_dir:
+            os.makedirs(dir_)
+
         self.log_map = {}
         self._create_logs()
 

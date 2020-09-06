@@ -8,7 +8,8 @@
 #                     '$request_time';
 
 from collections import namedtuple
-import datetime
+import argparse
+from datetime import date
 import gzip
 import logging
 import os
@@ -20,7 +21,12 @@ config = {
     "REPORT_DIR": "./reports",
     "LOG_DIR": "./log",
     "VALID_LOG_FORMATS": ["gz", "log"],
+    "LOR_OUTPUT_DIR": "./output"
 }
+
+filename = config.get("LOG_OUTPUT_DIR")
+LOG_FORMAT = "[%(asctime)s] %(levelname).1s %(message)s"
+logging.basicConfig(format=LOG_FORMAT, filename=filename)
 
 
 def is_ui_log(file_name):
@@ -44,11 +50,11 @@ def is_valid_format(file_name, valid_formats):
 
 def get_date_from_log_name(log_name):
     """Вытаскивает дату создания из имени лога"""
-    date = re.search(r"\d+", log_name).group()
-    year = date[:4]
-    month = date[4:6]
-    day = date[6:]
-    return datetime.date(year=int(year), month=int(month), day=int(day))
+    date_ = re.search(r"\d+", log_name).group()
+    year = date_[:4]
+    month = date_[4:6]
+    day = date_[6:]
+    return date(year=int(year), month=int(month), day=int(day))
 
 
 def get_latest_log_file(log_dir, valid_formats):
@@ -81,8 +87,8 @@ def get_latest_log_file(log_dir, valid_formats):
     return result
 
 
-def get_request_params(logfile):
-    opener = gzip if logfile.name.endswitg("gz") else open
+def parse_request_params(logfile):
+    opener = gzip if logfile.name.endswith("gz") else open
     with opener.open(logfile.path, 'r') as file:
         for row in file:
             request = row.decode(encoding="utf-8")
@@ -102,7 +108,7 @@ def get_table_json(logfile):
     data = {}
     count_total_req = 0
     request_time_sum = 0
-    for url, time in get_request_params(logfile):
+    for url, time in parse_request_params(logfile):
         count_total_req += 1
         request_time_sum += time
         if url not in data:
@@ -116,28 +122,50 @@ def get_table_json(logfile):
 
     result = []
     for val in data.values():
-        val["count_perc"] = (val["count"] / count_total_req) * 100
-        val["time_perc"] = (val["time_sum"] / request_time_sum) * 100
-        val["time_avg"] = val["time_sum"] / val["count"]
+        val["time_sum"] = round(val["time_sum"], ndigits=3)
+        count_perc = (val["count"] / count_total_req) * 100
+        val["count_perc"] = round(count_perc, ndigits=3)
+        time_perc = (val["time_sum"] / request_time_sum) * 100
+        val["time_perc"] = round(time_perc, ndigits=3)
+        time_avg = val["time_sum"] / val["count"]
+        val["time_avg"] = round(time_avg, ndigits=3)
         result.append(val)
 
     return result
 
 
+def is_report_exist(date):
+    return False
+
+
 def render_template(table_json):
-    f = open("report.html", "r")
-    tmp = f.read()
-    t = Template(tmp)
-    report = t.safe_substitute(table_json=table_json)
-    f.close()
-    f = open("test.html", "w")
-    f.write(report)
-    f.close()
+    with open("report.html", "r") as report:
+        template = Template(report.read())
+        content = template.safe_substitute(table_json=table_json)
+    return content
+
+
+def create_report_if_not_exist(content, logfile):
+    if is_report_exist(logfile.name):
+        return
+
+    date_ = date.strftime(logfile.date, "%Y.%m.%d")
+    name = f"report-{date_}.html"
+    with open(name, "w") as report:
+        report.write(content)
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Анализатор логов nginx")
+    parser.add_argument("--config", help="Путь к файлу с конфигурацией")
+
     logfile = get_latest_log_file(config["LOG_DIR"], config["VALID_LOG_FORMATS"])
+    if logfile.name is None:
+        logging.info("Не найдено файлов для анализа")
+        return
     table_json = get_table_json(logfile)
+    content = render_template(table_json)
+    create_report_if_not_exist(content, logfile)
     render_template(table_json)
 
 
