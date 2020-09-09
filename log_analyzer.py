@@ -87,7 +87,7 @@ def get_latest_log_file(log_dir, valid_formats):
     return result
 
 
-def parse_request_params(logfile):
+def request_params(logfile):
     opener = gzip if logfile.name.endswith("gz") else open
     with opener.open(logfile.path, 'r') as file:
         for row in file:
@@ -116,11 +116,11 @@ def get_mediane(values):
         return values[mid_index]
 
 
-def get_table_json(logfile):
+def get_statistics(logfile):
     data = {}
     count_total_req = 0
     request_time_sum = 0
-    for url, time in parse_request_params(logfile):
+    for url, time in request_params(logfile):
         count_total_req += 1
         request_time_sum += time
         if url not in data:
@@ -144,14 +144,20 @@ def get_table_json(logfile):
         val["time_perc"] = round(time_perc, ndigits=3)
         time_avg = val["time_sum"] / val["count"]
         val["time_avg"] = round(time_avg, ndigits=3)
-        val["time_med"] = round(get_mediane(val["values"]), ndigits=3)
-        del val["values"]
+        values = val.pop("values")
+        val["time_med"] = round(get_mediane(values), ndigits=3)
         result.append(val)
 
     return result
 
 
-def is_report_exist(date):
+def is_report_exist(report_date, report_dir):
+    if not os.path.exists(report_dir):
+        return False
+    expected_name = generate_report_name(report_date)
+    for report in os.listdir(report_dir):
+        if report == expected_name:
+            return True
     return False
 
 
@@ -162,13 +168,19 @@ def render_template(table_json):
     return content
 
 
-def create_report_if_not_exist(content, logfile):
-    if is_report_exist(logfile.name):
-        return
+def generate_report_name(report_date):
+    date_ = date.strftime(report_date, "%Y.%m.%d")
+    return f"report-{date_}.html"
 
-    date_ = date.strftime(logfile.date, "%Y.%m.%d")
-    name = f"report-{date_}.html"
-    with open(name, "w") as report:
+
+def create_report_dir_if_not_exist(report_dir):
+    pass
+
+
+def create_report(content, logfile, config):
+    report_name = generate_report_name(logfile.date)
+    path = os.path.join(config["REPORT_DIR"], report_name)
+    with open(path, "w") as report:
         report.write(content)
 
 
@@ -180,10 +192,13 @@ def main():
     if logfile.name is None:
         logging.info("Не найдено файлов для анализа")
         return
-    table_json = get_table_json(logfile)
-    content = render_template(table_json)
-    create_report_if_not_exist(content, logfile)
-    render_template(table_json)
+    if is_report_exist(logfile.date, config["REPORT_DIR"]):
+        return
+    table_json = get_statistics(logfile)
+    table_json.sort(key=lambda v: v["time_sum"], reverse=True)
+    limit = config["REPORT_SIZE"]
+    content = render_template(table_json[:limit])
+    create_report(content, logfile, config)
 
 
 if __name__ == "__main__":

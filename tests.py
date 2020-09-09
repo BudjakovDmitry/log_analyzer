@@ -10,6 +10,14 @@ import unittest
 import log_analyzer
 
 
+def get_random_date():
+    start_date = datetime.date(1900, 1, 1)
+    end_date = datetime.date(2050, 12, 31)
+    delta = end_date - start_date
+    delta_days = delta.days
+    return start_date + datetime.timedelta(days=random.randrange(delta_days))
+
+
 class TestDefaultConfig(unittest.TestCase):
     def test_default_config_is_present(self):
         self.assertTrue(hasattr(log_analyzer, "config"), msg="Default config is not present")
@@ -25,7 +33,7 @@ class TestDefaultConfig(unittest.TestCase):
 
 class TestValidLogFormat(unittest.TestCase):
     valid_log_formats = ["gz", "log"]
-    name_gz = "some_log.gz"
+    name_gz = "some_log.log-20190305.gz"
     name_log = "some_log.log-20190630"
     name = "some_log"
     name_bz2 = "some_log.bz2"
@@ -49,14 +57,24 @@ class TestValidLogFormat(unittest.TestCase):
 
 class TestIsUiLog(unittest.TestCase):
     ui_log = "nginx-access-ui.log-20190312"
-    not_ui_log = "nginx-access-blabla.log-20180301"
+    ui_gz = "nginx-access-ui.log-20200402.gz"
+    not_ui_log = "nginx-access-other.log-20180301"
+    not_ui_gz = "nginx-access-other.log-20200520.gz"
 
     def test_affirmative(self):
         res = log_analyzer.is_ui_log(self.ui_log)
         self.assertTrue(res)
 
+    def test_affirmative_gz(self):
+        res = log_analyzer.is_ui_log(self.ui_gz)
+        self.assertTrue(res)
+
     def test_negative(self):
         res = log_analyzer.is_ui_log(self.not_ui_log)
+        self.assertFalse(res)
+
+    def test_negative_gz(self):
+        res = log_analyzer.is_ui_log(self.not_ui_gz)
         self.assertFalse(res)
 
 
@@ -83,24 +101,9 @@ class TestLatestLogFile(unittest.TestCase):
     valid_formats = ["gz", "log"]
     log_map = {}
 
-    @staticmethod
-    def _get_random_datetime():
-        start_date = datetime.date(1900, 1, 1)
-        end_date = datetime.date(2050, 12, 31)
-        delta = end_date - start_date
-        delta_days = delta.days
-        return start_date + datetime.timedelta(days=random.randrange(delta_days))
-
-    # @staticmethod
-    # def _get_log_date(filename):
-    #     fn = filename.rstrip(".gz")
-    #     date_str = fn.split("-")[-1]
-    #     year, month, day = int(date_str[:4]), int(date_str[4:6]), int(date_str[6:])
-    #     return datetime.date(year=year, month=month, day=day)
-
     def _create_logs(self, count=10, log_type="ui", is_gz=False):
         for _ in range(count):
-            date = self._get_random_datetime()
+            date = get_random_date()
             month = f"{date.month}" if date.month >= 10 else f"0{date.month}"
             day = f"{date.day}" if date.day >= 10 else f"0{date.day}"
             name = f"nginx-access-{log_type}.log-{date.year}{month}{day}"
@@ -124,7 +127,6 @@ class TestLatestLogFile(unittest.TestCase):
             os.makedirs(dir_)
 
         self.log_map = {}
-        self._create_logs()
 
     def test_log_dir_is_not_exist(self):
         log = log_analyzer.get_latest_log_file(self.not_existing_dir, self.valid_formats)
@@ -141,14 +143,16 @@ class TestLatestLogFile(unittest.TestCase):
         self.assertIsNone(log.date)
 
     def test_return_format(self):
+        self._create_logs()
         log = log_analyzer.get_latest_log_file(self.log_dir, self.valid_formats)
         self.assertIsInstance(log, tuple, msg="Incorrect return type")
 
     def test_latest_log(self):
+        self._create_logs()
         files = []
         for _, _, filenames in os.walk(self.log_dir):
             files.extend(filenames)
-        sorted_dates = sorted(self.log_map.keys())
+        sorted_dates = sorted(self.log_map.keys(), reverse=True)
         latest_date = sorted_dates[0]
         latest_log = self.log_map[latest_date]
         Latest = namedtuple("Latest", ["name", "path", "date"])
@@ -157,17 +161,69 @@ class TestLatestLogFile(unittest.TestCase):
             path=os.path.join(self.log_dir, latest_log),
             date=latest_date,
         )
-        real_latest = log_analyzer.get_latest_log_file(self.log_dir, self)
+        real_latest = log_analyzer.get_latest_log_file(self.log_dir, self.valid_formats)
         self.assertEqual(expected_latest, real_latest, msg="Function return not latest log file")
 
-    # 3 папка есть, содержимое есть, но нужных логов нет
-    # 3 папка есть, и есть несколько логов подходящих и не подходящих
+
+class TestGenerateReportName(unittest.TestCase):
+    def test_less_than_ten(self):
+        year = 2018
+        month = 7
+        day = 9
+        date = datetime.date(year=year, month=month, day=day)
+        expected_name = f"report-{year}.0{month}.0{day}.html"
+        real_name = log_analyzer.generate_report_name(date)
+        self.assertEqual(expected_name, real_name)
+
+    def test_more_than_ten(self):
+        year = 2018
+        month = 12
+        day = 31
+        date = datetime.date(year=year, month=month, day=day)
+        expected_name = f"report-{year}.{month}.{day}.html"
+        real_name = log_analyzer.generate_report_name(date)
+        self.assertEqual(expected_name, real_name)
 
 
-class TestMain(unittest.TestCase):
-    def test_main(self):
-        pass
-        # log_analyzer.main()
+class TestIsReportExist(unittest.TestCase):
+    not_existing_report_dir = "/tmp/log_analyzer/not_existing_report_dir"
+    existing_report_dir = "/tmp/log_analyzer/report_dir"
+
+    def setUp(self):
+        for dir_ in self.not_existing_report_dir, self.existing_report_dir:
+            if os.path.exists(dir_):
+                shutil.rmtree(dir_)
+
+        os.makedirs(self.existing_report_dir)
+
+    def _create_report(self, date):
+        year = date.year
+        month = date.month
+        day = date.day
+        month_str = str(month) if month > 10 else f"0{month}"
+        day_str = str(day) if day > 10 else f"0{day}"
+        name = f"report-{year}.{month_str}.{day_str}.html"
+        path = os.path.join(self.existing_report_dir, name)
+        with open(path, "wb") as report:
+            report.write(b"")
+
+    def test_report_exist(self):
+        date = get_random_date()
+        self._create_report(date)
+        res = log_analyzer.is_report_exist(report_date=date, report_dir=self.existing_report_dir)
+        self.assertTrue(res)
+
+    def test_report_is_not_exist(self):
+        date = get_random_date()
+        res = log_analyzer.is_report_exist(report_date=date, report_dir=self.existing_report_dir)
+        self.assertFalse(res)
+
+    def test_dir_is_not_exist(self):
+        date = get_random_date()
+        res = log_analyzer.is_report_exist(
+            report_date=date, report_dir=self.not_existing_report_dir
+        )
+        self.assertFalse(res)
 
 
 if __name__ == "__main__":
