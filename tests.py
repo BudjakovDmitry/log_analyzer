@@ -1,11 +1,12 @@
 #!/usr/bin/env python
-from collections import namedtuple
+from collections import defaultdict, namedtuple
 import datetime
 import gzip
 import shutil
 import os
 import random
 import unittest
+from unittest.mock import patch
 
 import log_analyzer
 
@@ -224,6 +225,31 @@ class TestIsReportExist(unittest.TestCase):
             report_date=date, report_dir=self.not_existing_report_dir
         )
         self.assertFalse(res)
+
+
+class TestGetStatistic(unittest.TestCase):
+    patched_method = "log_analyzer.request_params"
+    mocked_requests = []
+    route_counters = defaultdict(int)
+    with open("./mocked_data/requests", "r") as requests:
+        for row in requests:
+            url, time = row.split()
+            route_counters[url] += 1
+            mocked_requests.append((url, float(time)))
+
+    def test_split_by_url(self):
+        with patch(self.patched_method, return_value=self.mocked_requests):
+            result = log_analyzer.get_statistics(tuple())
+        self.assertEqual(len(result), len(self.route_counters.keys()))
+
+    def test_count(self):
+        with patch(self.patched_method, return_value=self.mocked_requests):
+            result = log_analyzer.get_statistics(tuple())
+        for row in result:
+            url = row["url"]
+            expected_count = self.route_counters[url]
+            real_count = row["count"]
+            self.assertEqual(expected_count, real_count)
 
 
 if __name__ == "__main__":
