@@ -229,13 +229,31 @@ class TestIsReportExist(unittest.TestCase):
 
 class TestGetStatistic(unittest.TestCase):
     patched_method = "log_analyzer.request_params"
+    assertion_delta = 1e-5
     mocked_requests = []
     route_counters = defaultdict(int)
-    with open("./mocked_data/requests", "r") as requests:
-        for row in requests:
-            url, time = row.split()
-            route_counters[url] += 1
-            mocked_requests.append((url, float(time)))
+    time_sum = defaultdict(int)
+    time_values = defaultdict(list)
+    total_requests_count = 0
+    total_time_sum = 0
+
+    def __new__(cls, *args, **kwargs):
+        obj = super().__new__(cls)
+        if cls.mocked_requests:
+            return obj
+
+        with open("./mocked_data/requests", "r") as requests:
+            for row in requests:
+                url, time = row.split()
+                time = float(time)
+                cls.route_counters[url] += 1
+                cls.time_sum[url] += time
+                cls.total_requests_count += 1
+                cls.total_time_sum += time
+                cls.time_values[url].append(time)
+                cls.mocked_requests.append((url, time))
+
+        return obj
 
     def test_split_by_url(self):
         with patch(self.patched_method, return_value=self.mocked_requests):
@@ -250,6 +268,113 @@ class TestGetStatistic(unittest.TestCase):
             expected_count = self.route_counters[url]
             real_count = row["count"]
             self.assertEqual(expected_count, real_count)
+
+    def test_count_perc(self):
+        with patch(self.patched_method, return_value=self.mocked_requests):
+            result = log_analyzer.get_statistics(tuple())
+        for row in result:
+            url = row["url"]
+            expected_perc = (self.route_counters[url] / self.total_requests_count) * 100
+            expected_perc = round(expected_perc, ndigits=3)
+            real_perc = row["count_perc"]
+            self.assertEqual(expected_perc, real_perc)
+
+    def test_time_sum(self):
+        with patch(self.patched_method, return_value=self.mocked_requests):
+            result = log_analyzer.get_statistics(tuple())
+        for row in result:
+            url = row["url"]
+            expected_time_sum = self.time_sum[url]
+            real_time_sum = row["time_sum"]
+            delta = abs(expected_time_sum - real_time_sum)
+            self.assertLess(delta, self.assertion_delta)
+
+    def test_time_perc(self):
+        with patch(self.patched_method, return_value=self.mocked_requests):
+            result = log_analyzer.get_statistics(tuple())
+        for row in result:
+            url = row["url"]
+            expected_time_perc = (self.time_sum[url] / self.total_time_sum) * 100
+            expected_time_perc = round(expected_time_perc, ndigits=3)
+            real_time_perc = row["time_perc"]
+            delta = abs(expected_time_perc - real_time_perc)
+            self.assertLess(delta, self.assertion_delta)
+
+    def test_time_avg(self):
+        with patch(self.patched_method, return_value=self.mocked_requests):
+            result = log_analyzer.get_statistics(tuple())
+        for row in result:
+            url = row["url"]
+            values = self.time_values[url]
+            expected_avg = round(sum(values) / len(values), ndigits=3)
+            real_avg = row["time_avg"]
+            delta = abs(expected_avg - real_avg)
+            self.assertLess(delta, self.assertion_delta)
+
+    def test_time_max(self):
+        with patch(self.patched_method, return_value=self.mocked_requests):
+            result = log_analyzer.get_statistics(tuple())
+        for row in result:
+            url = row["url"]
+            values = self.time_values[url]
+            expected_max_value = max(values)
+            real_max_value = row["time_max"]
+            delta = abs(expected_max_value - real_max_value)
+            self.assertLess(delta, self.assertion_delta)
+
+    def test_time_med(self):
+        with patch(self.patched_method, return_value=self.mocked_requests):
+            result = log_analyzer.get_statistics(tuple())
+        for row in result:
+            url = row["url"]
+            values = self.time_values[url]
+            values.sort(reverse=True)
+            len_values = len(values)
+            central_index = len_values // 2
+            if len_values % 2 != 0:
+                expected_med = values[central_index]
+            else:
+                val_1 = values[central_index]
+                val_2 = values[central_index - 1]
+                expected_med = (val_1 + val_2) / 2
+            real_med = row["time_med"]
+            delta = abs(expected_med - real_med)
+            self.assertLess(delta, self.assertion_delta)
+
+
+class TestGetMediane(unittest.TestCase):
+    assertion_delta = 1e-5
+
+    def test_one_element(self):
+        one_element = [random.randint(0, 100)]
+        expected_med = one_element[0]
+        real_med = log_analyzer.get_median(one_element)
+        self.assertEqual(expected_med, real_med)
+
+    def test_two_elements(self):
+        two_elements = [random.randint(0, 100) for _ in range(2)]
+        expected_med = sum(two_elements) / len(two_elements)
+        real_med = log_analyzer.get_median(two_elements)
+        delta = abs(expected_med - real_med)
+        self.assertLess(delta, self.assertion_delta)
+
+    def test_odd(self):
+        odd = [random.randint(0, 100) for _ in range(55)]
+        odd.sort(reverse=True)
+        index = len(odd) // 2
+        expected_med = odd[index]
+        real_med = log_analyzer.get_median(odd)
+        self.assertEqual(expected_med, real_med)
+
+    def test_even(self):
+        even = [random.randint(0, 100) for _ in range(42)]
+        even.sort(reverse=True)
+        second = len(even) // 2
+        first = second - 1
+        expected_med = (even[second] + even[first]) / 2
+        real_med = log_analyzer.get_median(even)
+        delta = abs(expected_med - real_med)
+        self.assertLess(delta, self.assertion_delta)
 
 
 if __name__ == "__main__":

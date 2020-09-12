@@ -15,18 +15,17 @@ import logging
 import os
 import re
 from string import Template
+import json
+import sys
 
 config = {
     "REPORT_SIZE": 1000,
     "REPORT_DIR": "./reports",
     "LOG_DIR": "./log",
-    "VALID_LOG_FORMATS": ["gz", "log"],
-    "LOR_OUTPUT_DIR": "./output"
+    "OUTPUT_LOG_DIR": "./output_log"
 }
 
-filename = config.get("LOG_OUTPUT_DIR")
 LOG_FORMAT = "[%(asctime)s] %(levelname).1s %(message)s"
-logging.basicConfig(format=LOG_FORMAT, filename=filename)
 
 
 def is_ui_log(file_name):
@@ -104,8 +103,8 @@ def request_params(logfile):
             yield url, time
 
 
-def get_mediane(values):
-    values.sort()
+def get_median(values):
+    values.sort(reverse=True)
     len_ = len(values)
     if len_ % 2 == 0:
         mid_index_1 = len_ // 2
@@ -145,7 +144,7 @@ def get_statistics(logfile):
         time_avg = val["time_sum"] / val["count"]
         val["time_avg"] = round(time_avg, ndigits=3)
         values = val.pop("values")
-        val["time_med"] = round(get_mediane(values), ndigits=3)
+        val["time_med"] = round(get_median(values), ndigits=3)
         result.append(val)
 
     return result
@@ -186,7 +185,24 @@ def create_report(content, logfile, config):
 
 def main():
     parser = argparse.ArgumentParser(description="Анализатор логов nginx")
-    parser.add_argument("--config", help="Путь к файлу с конфигурацией")
+    parser.add_argument("--config", default="./config.json", help="Путь к файлу с конфигурацией")
+    args = parser.parse_args()
+    args_config = args.config
+    logging.basicConfig(format=LOG_FORMAT)
+    if not os.path.exists(args_config):
+        logging.error("Config file not fount")
+        sys.exit(1)
+    with open(args_config, "r") as cf:
+        content = cf.read()
+        if content:
+            new_config_params = json.loads(content)
+            config.update(new_config_params)
+
+    output_log_dir = config.get("OUTPUT_LOG_DIR")
+    filename = None
+    if output_log_dir:
+        filename = os.path.join(output_log_dir, f"{date.today()}.txt")
+    logging.basicConfig(format=LOG_FORMAT, filename=filename)
 
     logfile = get_latest_log_file(config["LOG_DIR"], config["VALID_LOG_FORMATS"])
     if logfile.name is None:

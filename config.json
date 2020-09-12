@@ -1,0 +1,4 @@
+{
+  "VALID_LOG_FORMATS": ["gz", "log"],
+  "OUTPUT_LOG_DIR": "./"
+}
