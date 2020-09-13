@@ -7,16 +7,17 @@
 #                     '"$http_user_agent" "$http_x_forwarded_for" "$http_X_REQUEST_ID" "$http_X_RB_USER" '
 #                     '$request_time';
 
-from collections import namedtuple
 import argparse
-from datetime import date
 import gzip
+import json
 import logging
 import os
 import re
-from string import Template
-import json
 import sys
+import traceback
+from collections import namedtuple
+from datetime import date
+from string import Template
 
 config = {
     "REPORT_SIZE": 1000,
@@ -26,6 +27,18 @@ config = {
 }
 
 LOG_FORMAT = "[%(asctime)s] %(levelname).1s %(message)s"
+DATE_FMT = "%Y.%m.%d %H:%M:%S"
+
+
+def exception_handler(type, value, tb):
+    """Обработчик исключений"""
+    tb_formatted = traceback.format_exception(type, value, tb)
+    tb_str = "".join(tb_formatted)
+    msg = f"{type.__name__}: {value}\n{tb_str}"
+    logging.exception(msg, exc_info=False)
+
+
+sys.excepthook = exception_handler
 
 
 def is_ui_log(file_name):
@@ -87,23 +100,30 @@ def get_latest_log_file(log_dir, valid_formats):
 
 
 def request_params(logfile):
+    """
+    Генератор. На каждой итерации возвращает URL и время выполнения для каждой записи из файла лога
+    """
     opener = gzip if logfile.name.endswith("gz") else open
     with opener.open(logfile.path, 'r') as file:
         for row in file:
             request = row.decode(encoding="utf-8")
             request_url = re.search(r"\"(GET|POST|PUT|HEAD|OPTIONS)\s\S+", request)
             if request_url is None:
-                logging.warning(row)
+                logging.info(f"Can not find url in request: {request.rstrip()}")
                 continue
+
             request_time = re.search(r"\s\d+\.\d+\s", request)
             if request_time is None:
-                logging.warning(row)
+                logging.info(f"Can not find request time for request: {request.rstrip()}")
+                continue
+
             time = float(request_time.group())
             url = request_url.group().split()[-1]
             yield url, time
 
 
 def get_median(values):
+    """Возвращает медиану для списка значений"""
     values.sort(reverse=True)
     len_ = len(values)
     if len_ % 2 == 0:
@@ -116,6 +136,7 @@ def get_median(values):
 
 
 def get_statistics(logfile):
+    """Возвращает статистику по запросам"""
     data = {}
     count_total_req = 0
     request_time_sum = 0
@@ -151,6 +172,7 @@ def get_statistics(logfile):
 
 
 def is_report_exist(report_date, report_dir):
+    """Проверяет, существует ли отчет за указанную дату"""
     if not os.path.exists(report_dir):
         return False
     expected_name = generate_report_name(report_date)
@@ -161,6 +183,7 @@ def is_report_exist(report_date, report_dir):
 
 
 def render_template(table_json):
+    """Создает шаблон отчета"""
     with open("report.html", "r") as report:
         template = Template(report.read())
         content = template.safe_substitute(table_json=table_json)
@@ -168,6 +191,7 @@ def render_template(table_json):
 
 
 def generate_report_name(report_date):
+    """Генерирует имя отчета для указанной даты"""
     date_ = date.strftime(report_date, "%Y.%m.%d")
     return f"report-{date_}.html"
 
@@ -177,6 +201,7 @@ def create_report_dir_if_not_exist(report_dir):
 
 
 def create_report(content, logfile, config):
+    """Создает отчет"""
     report_name = generate_report_name(logfile.date)
     path = os.path.join(config["REPORT_DIR"], report_name)
     with open(path, "w") as report:
@@ -184,14 +209,14 @@ def create_report(content, logfile, config):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Анализатор логов nginx")
-    parser.add_argument("--config", default="./config.json", help="Путь к файлу с конфигурацией")
+    parser = argparse.ArgumentParser(description="Nginx logs analyzer")
+    parser.add_argument("--config", default="./config.json", help="Path to json config file")
     args = parser.parse_args()
     args_config = args.config
-    logging.basicConfig(format=LOG_FORMAT)
     if not os.path.exists(args_config):
         logging.error("Config file not fount")
         sys.exit(1)
+
     with open(args_config, "r") as cf:
         content = cf.read()
         if content:
@@ -200,16 +225,20 @@ def main():
 
     output_log_dir = config.get("OUTPUT_LOG_DIR")
     filename = None
+    today = date.today()
     if output_log_dir:
-        filename = os.path.join(output_log_dir, f"{date.today()}.txt")
-    logging.basicConfig(format=LOG_FORMAT, filename=filename)
+        filename = os.path.join(output_log_dir, f"{today}.txt")
+
+    logging.basicConfig(format=LOG_FORMAT, datefmt=DATE_FMT, filename=filename, level=logging.INFO)
 
     logfile = get_latest_log_file(config["LOG_DIR"], config["VALID_LOG_FORMATS"])
     if logfile.name is None:
-        logging.info("Не найдено файлов для анализа")
+        logging.info("Nginx logs not found")
         return
     if is_report_exist(logfile.date, config["REPORT_DIR"]):
+        logging.info(f"Report is already exists")
         return
+
     table_json = get_statistics(logfile)
     table_json.sort(key=lambda v: v["time_sum"], reverse=True)
     limit = config["REPORT_SIZE"]
