@@ -1,4 +1,5 @@
 {
   "VALID_LOG_FORMATS": ["gz", "log"],
-  "OUTPUT_LOG_DIR": "./"
+  "OUTPUT_LOG_DIR": "./",
+  "ERROR_LIMIT_PERC": 10
 }

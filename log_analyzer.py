@@ -28,6 +28,7 @@ config = {
 
 LOG_FORMAT = "[%(asctime)s] %(levelname).1s %(message)s"
 DATE_FMT = "%Y.%m.%d %H:%M:%S"
+ERROR_EXIT_STATUS = 1
 
 
 def exception_handler(type, value, tb):
@@ -99,27 +100,54 @@ def get_latest_log_file(log_dir, valid_formats):
     return result
 
 
+def get_opener(logname):
+    return gzip if logname.endswith("gz") else open
+
+
 def request_params(logfile):
     """
     Генератор. На каждой итерации возвращает URL и время выполнения для каждой записи из файла лога
     """
-    opener = gzip if logfile.name.endswith("gz") else open
-    with opener.open(logfile.path, 'r') as file:
+    opener = get_opener(logfile.name)
+    log_size = get_log_size(logfile)
+    errors_limit = get_errors_limit(log_size, config["ERROR_LIMIT_PERC"])
+    errors_counter = 0
+    with opener.open(logfile.path, "r") as file:
         for row in file:
             request = row.decode(encoding="utf-8")
             request_url = re.search(r"\"(GET|POST|PUT|HEAD|OPTIONS)\s\S+", request)
             if request_url is None:
+                errors_counter += 1
                 logging.info(f"Can not find url in request: {request.rstrip()}")
+                if errors_counter >= errors_limit:
+                    logging.error("Can not parse log file. Too much errors")
+                    sys.exit(ERROR_EXIT_STATUS)
                 continue
 
             request_time = re.search(r"\s\d+\.\d+\s", request)
             if request_time is None:
+                errors_counter += 1
                 logging.info(f"Can not find request time for request: {request.rstrip()}")
+                if errors_counter >= errors_limit:
+                    logging.error("Can not parse log file. Too much errors")
                 continue
 
             time = float(request_time.group())
             url = request_url.group().split()[-1]
             yield url, time
+
+
+def get_log_size(logfile):
+    opener = get_opener(logfile.name)
+    with opener.open(logfile.path, "rb") as file:
+        counter = 0
+        for _ in file:
+            counter += 1
+    return counter
+
+
+def get_errors_limit(log_size, errors_limit_perc):
+    return int((log_size * errors_limit_perc) // 100)
 
 
 def get_median(values):
