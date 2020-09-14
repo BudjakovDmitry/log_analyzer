@@ -1,0 +1,4 @@
+{
+  "OUTPUT_LOG_DIR": "./output_log",
+  "ERROR_LIMIT_PERC": 10
+}
