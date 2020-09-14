@@ -21,9 +21,11 @@ from string import Template
 
 config = {
     "REPORT_SIZE": 1000,
+    "VALID_LOG_FORMATS": ["gz", "log"],
     "REPORT_DIR": "./reports",
     "LOG_DIR": "./log",
-    "OUTPUT_LOG_DIR": "./output_log"
+    "OUTPUT_LOG_DIR": "./",
+    "ERROR_LIMIT_PERC": 5,
 }
 
 LOG_FORMAT = "[%(asctime)s] %(levelname).1s %(message)s"
@@ -253,6 +255,8 @@ def main(basic_config, config_file_path):
     filename = None
     today = date.today()
     if output_log_dir:
+        if not os.path.exists(output_log_dir):
+            os.makedirs(output_log_dir)
         filename = os.path.join(output_log_dir, f"{today}.txt")
 
     logging.basicConfig(format=LOG_FORMAT, datefmt=DATE_FMT, filename=filename, level=logging.INFO)
