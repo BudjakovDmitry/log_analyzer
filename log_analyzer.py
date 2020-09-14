@@ -106,10 +106,11 @@ def get_latest_log_file(log_dir, valid_formats):
 
 
 def get_opener(logname):
+    """Объект для открытия файла лога"""
     return gzip if logname.endswith("gz") else open
 
 
-def request_params(logfile):
+def request_params(logfile, config):
     """
     Генератор. На каждой итерации возвращает URL и время выполнения для каждой записи из файла лога
     """
@@ -135,6 +136,7 @@ def request_params(logfile):
                 logging.info(f"Can not find request time for request: {request.rstrip()}")
                 if errors_counter >= errors_limit:
                     logging.error("Can not parse log file. Too much errors")
+                    sys.exit(ERROR_EXIT_STATUS)
                 continue
 
             time = float(request_time.group())
@@ -143,6 +145,7 @@ def request_params(logfile):
 
 
 def get_log_size(logfile):
+    """Возвращает количество записей в лог-файле"""
     opener = get_opener(logfile.name)
     with opener.open(logfile.path, "rb") as file:
         counter = 0
@@ -152,6 +155,10 @@ def get_log_size(logfile):
 
 
 def get_errors_limit(log_size, errors_limit_perc):
+    """
+    Возвращает максимально возможное количество ошибок.
+    При превышении этого значения парсер остановит работу.
+    """
     return int((log_size * errors_limit_perc) // 100)
 
 
@@ -168,12 +175,12 @@ def get_median(values):
         return values[mid_index]
 
 
-def get_statistics(logfile):
+def get_statistics(logfile, config):
     """Возвращает статистику по запросам"""
     data = {}
     count_total_req = 0
     request_time_sum = 0
-    for url, time in request_params(logfile):
+    for url, time in request_params(logfile, config):
         count_total_req += 1
         request_time_sum += time
         if url not in data:
@@ -269,7 +276,7 @@ def main(basic_config, config_file_path):
         logging.info(f"Report is already exists")
         return
 
-    table_json = get_statistics(logfile)
+    table_json = get_statistics(logfile, basic_config)
     table_json.sort(key=lambda v: v["time_sum"], reverse=True)
     limit = basic_config["REPORT_SIZE"]
     content = render_template(table_json[:limit])

@@ -285,12 +285,12 @@ class TestGetStatistic(unittest.TestCase):
 
     def test_split_by_url(self):
         with patch(self.patched_method, return_value=self.mocked_requests):
-            result = log_analyzer.get_statistics(tuple())
+            result = log_analyzer.get_statistics(tuple(), {})
         self.assertEqual(len(result), len(self.route_counters.keys()))
 
     def test_count(self):
         with patch(self.patched_method, return_value=self.mocked_requests):
-            result = log_analyzer.get_statistics(tuple())
+            result = log_analyzer.get_statistics(tuple(), {})
         for row in result:
             url = row["url"]
             expected_count = self.route_counters[url]
@@ -299,7 +299,7 @@ class TestGetStatistic(unittest.TestCase):
 
     def test_count_perc(self):
         with patch(self.patched_method, return_value=self.mocked_requests):
-            result = log_analyzer.get_statistics(tuple())
+            result = log_analyzer.get_statistics(tuple(), {})
         for row in result:
             url = row["url"]
             expected_perc = (self.route_counters[url] / self.total_requests_count) * 100
@@ -309,7 +309,7 @@ class TestGetStatistic(unittest.TestCase):
 
     def test_time_sum(self):
         with patch(self.patched_method, return_value=self.mocked_requests):
-            result = log_analyzer.get_statistics(tuple())
+            result = log_analyzer.get_statistics(tuple(), {})
         for row in result:
             url = row["url"]
             expected_time_sum = self.time_sum[url]
@@ -319,7 +319,7 @@ class TestGetStatistic(unittest.TestCase):
 
     def test_time_perc(self):
         with patch(self.patched_method, return_value=self.mocked_requests):
-            result = log_analyzer.get_statistics(tuple())
+            result = log_analyzer.get_statistics(tuple(), {})
         for row in result:
             url = row["url"]
             expected_time_perc = (self.time_sum[url] / self.total_time_sum) * 100
@@ -330,7 +330,7 @@ class TestGetStatistic(unittest.TestCase):
 
     def test_time_avg(self):
         with patch(self.patched_method, return_value=self.mocked_requests):
-            result = log_analyzer.get_statistics(tuple())
+            result = log_analyzer.get_statistics(tuple(), {})
         for row in result:
             url = row["url"]
             values = self.time_values[url]
@@ -341,7 +341,7 @@ class TestGetStatistic(unittest.TestCase):
 
     def test_time_max(self):
         with patch(self.patched_method, return_value=self.mocked_requests):
-            result = log_analyzer.get_statistics(tuple())
+            result = log_analyzer.get_statistics(tuple(), {})
         for row in result:
             url = row["url"]
             values = self.time_values[url]
@@ -352,7 +352,7 @@ class TestGetStatistic(unittest.TestCase):
 
     def test_time_med(self):
         with patch(self.patched_method, return_value=self.mocked_requests):
-            result = log_analyzer.get_statistics(tuple())
+            result = log_analyzer.get_statistics(tuple(), {})
         for row in result:
             url = row["url"]
             values = self.time_values[url]
