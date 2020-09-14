@@ -11,12 +11,21 @@ from unittest.mock import patch
 import log_analyzer
 
 
+TEST_CONFIG = {"key1": "value1", "key2": "value2", "key3": "value3"}
+
+
 def get_random_date():
     start_date = datetime.date(1900, 1, 1)
     end_date = datetime.date(2050, 12, 31)
     delta = end_date - start_date
     delta_days = delta.days
     return start_date + datetime.timedelta(days=random.randrange(delta_days))
+
+
+def remove_dirs(*dirs):
+    for dir_ in dirs:
+        if os.path.exists(dir_):
+            shutil.rmtree(dir_)
 
 
 class TestDefaultConfig(unittest.TestCase):
@@ -29,7 +38,31 @@ class TestDefaultConfig(unittest.TestCase):
 
     def test_default_log_dir_is_present(self):
         config = log_analyzer.config
-        self.assertIn("LOG_DIR", config, msg="'LOG_DIR' not in default config")
+        self.assertIn("LOG_DIR", config, msg="Default config has no 'LOG_DIR' parameter")
+
+
+class TestArgs(unittest.TestCase):
+    ERROR_EXIT_CODE = 1
+    default_config_file = "./config.json"
+    config_dir = "/tmp/log_analyzer/config"
+
+    def setUp(self):
+        remove_dirs(self.config_dir)
+        os.makedirs(self.config_dir)
+
+    def test_config(self):
+        args = log_analyzer.args
+        self.assertTrue(hasattr(args, "config"))
+
+    def test_config_default(self):
+        config_file = log_analyzer.args.config
+        self.assertEqual(config_file, self.default_config_file)
+
+    def test_exit_err_if_conf_not_found(self):
+        config_file = os.path.join(self.config_dir, "not_existing_config.json")
+        with self.assertRaises(SystemExit) as sys_exit:
+            log_analyzer.main(TEST_CONFIG, config_file)
+        self.assertEqual(sys_exit.exception.code, self.ERROR_EXIT_CODE)
 
 
 class TestValidLogFormat(unittest.TestCase):
@@ -120,9 +153,7 @@ class TestLatestLogFile(unittest.TestCase):
                     f.write("some content")
 
     def setUp(self):
-        for dir_ in self.not_existing_dir, self.empty_log_dir, self.log_dir:
-            if os.path.exists(dir_):
-                shutil.rmtree(dir_)
+        remove_dirs(self.not_existing_dir, self.empty_log_dir, self.log_dir)
 
         for dir_ in self.empty_log_dir, self.log_dir:
             os.makedirs(dir_)
@@ -191,10 +222,7 @@ class TestIsReportExist(unittest.TestCase):
     existing_report_dir = "/tmp/log_analyzer/report_dir"
 
     def setUp(self):
-        for dir_ in self.not_existing_report_dir, self.existing_report_dir:
-            if os.path.exists(dir_):
-                shutil.rmtree(dir_)
-
+        remove_dirs(self.not_existing_report_dir, self.existing_report_dir)
         os.makedirs(self.existing_report_dir)
 
     def _create_report(self, date):

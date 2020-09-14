@@ -30,6 +30,11 @@ LOG_FORMAT = "[%(asctime)s] %(levelname).1s %(message)s"
 DATE_FMT = "%Y.%m.%d %H:%M:%S"
 ERROR_EXIT_STATUS = 1
 
+parser = argparse.ArgumentParser(description="Nginx logs analyzer")
+parser.add_argument("--config", default="./config.json", help="Path to json config file")
+args = parser.parse_args()
+config_path = args.config
+
 
 def exception_handler(type, value, tb):
     """Обработчик исключений"""
@@ -43,16 +48,14 @@ sys.excepthook = exception_handler
 
 
 def is_ui_log(file_name):
-    """
-    Проверяет, что данный лог является логом интерфейса
-    """
+    """Проверяет, что данный лог является логом интерфейса"""
     name = file_name.split(".")[0]
     type_ = name.split("-")[-1]
     return type_ == "ui"
 
 
 def is_valid_format(file_name, valid_formats):
-    """Проверяет, что лог имеет корректный формат"""
+    """Проверяет, что лог имеет допустимое расширение"""
     suf = file_name.split(".")[-1]
     for ext in valid_formats:
         if suf.startswith(ext):
@@ -224,34 +227,29 @@ def generate_report_name(report_date):
     return f"report-{date_}.html"
 
 
-def create_report_dir_if_not_exist(report_dir):
-    pass
-
-
 def create_report(content, logfile, config):
     """Создает отчет"""
     report_name = generate_report_name(logfile.date)
-    path = os.path.join(config["REPORT_DIR"], report_name)
+    report_dir = config["REPORT_DIR"]
+    if not os.path.exists(report_dir):
+        os.makedirs(report_dir)
+    path = os.path.join(report_dir, report_name)
     with open(path, "w") as report:
         report.write(content)
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Nginx logs analyzer")
-    parser.add_argument("--config", default="./config.json", help="Path to json config file")
-    args = parser.parse_args()
-    args_config = args.config
-    if not os.path.exists(args_config):
+def main(basic_config, config_file_path):
+    if not os.path.exists(config_file_path):
         logging.error("Config file not fount")
-        sys.exit(1)
+        sys.exit(ERROR_EXIT_STATUS)
 
-    with open(args_config, "r") as cf:
+    with open(config_file_path, "r") as cf:
         content = cf.read()
         if content:
             new_config_params = json.loads(content)
-            config.update(new_config_params)
+            basic_config.update(new_config_params)
 
-    output_log_dir = config.get("OUTPUT_LOG_DIR")
+    output_log_dir = basic_config.get("OUTPUT_LOG_DIR")
     filename = None
     today = date.today()
     if output_log_dir:
@@ -259,20 +257,20 @@ def main():
 
     logging.basicConfig(format=LOG_FORMAT, datefmt=DATE_FMT, filename=filename, level=logging.INFO)
 
-    logfile = get_latest_log_file(config["LOG_DIR"], config["VALID_LOG_FORMATS"])
+    logfile = get_latest_log_file(basic_config["LOG_DIR"], basic_config["VALID_LOG_FORMATS"])
     if logfile.name is None:
         logging.info("Nginx logs not found")
         return
-    if is_report_exist(logfile.date, config["REPORT_DIR"]):
+    if is_report_exist(logfile.date, basic_config["REPORT_DIR"]):
         logging.info(f"Report is already exists")
         return
 
     table_json = get_statistics(logfile)
     table_json.sort(key=lambda v: v["time_sum"], reverse=True)
-    limit = config["REPORT_SIZE"]
+    limit = basic_config["REPORT_SIZE"]
     content = render_template(table_json[:limit])
-    create_report(content, logfile, config)
+    create_report(content, logfile, basic_config)
 
 
 if __name__ == "__main__":
-    main()
+    main(config, config_path)
