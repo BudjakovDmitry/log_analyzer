@@ -30,6 +30,7 @@ config = {
 
 LOG_FORMAT = "[%(asctime)s] %(levelname).1s %(message)s"
 DATE_FMT = "%Y.%m.%d %H:%M:%S"
+
 ERROR_EXIT_STATUS = 1
 
 parser = argparse.ArgumentParser(description="Nginx logs analyzer")
@@ -107,51 +108,26 @@ def get_latest_log_file(log_dir, valid_formats):
 
 def get_opener(logname):
     """Объект для открытия файла лога"""
-    return gzip if logname.endswith("gz") else open
+    return gzip.open if logname.endswith("gz") else open
 
 
-def request_params(logfile, config):
+def request_params(logfile):
     """
     Генератор. На каждой итерации возвращает URL и время выполнения для каждой записи из файла лога
     """
     opener = get_opener(logfile.name)
-    log_size = get_log_size(logfile)
-    errors_limit = get_errors_limit(log_size, config["ERROR_LIMIT_PERC"])
-    errors_counter = 0
-    with opener.open(logfile.path, "r") as file:
+    with opener(logfile.path, "r") as file:
         for row in file:
+            url = time = None
             request = row.decode(encoding="utf-8")
             request_url = re.search(r"\"(GET|POST|PUT|HEAD|OPTIONS)\s\S+", request)
-            if request_url is None:
-                errors_counter += 1
+            if request_url is not None:
+                request_time = re.search(r"\s\d+\.\d+\s", request)
+                time = float(request_time.group())
+                url = request_url.group().split()[-1]
+            else:
                 logging.info(f"Can not find url in request: {request.rstrip()}")
-                if errors_counter >= errors_limit:
-                    logging.error("Can not parse log file. Too much errors")
-                    sys.exit(ERROR_EXIT_STATUS)
-                continue
-
-            request_time = re.search(r"\s\d+\.\d+\s", request)
-            if request_time is None:
-                errors_counter += 1
-                logging.info(f"Can not find request time for request: {request.rstrip()}")
-                if errors_counter >= errors_limit:
-                    logging.error("Can not parse log file. Too much errors")
-                    sys.exit(ERROR_EXIT_STATUS)
-                continue
-
-            time = float(request_time.group())
-            url = request_url.group().split()[-1]
             yield url, time
-
-
-def get_log_size(logfile):
-    """Возвращает количество записей в лог-файле"""
-    opener = get_opener(logfile.name)
-    with opener.open(logfile.path, "rb") as file:
-        counter = 0
-        for _ in file:
-            counter += 1
-    return counter
 
 
 def get_errors_limit(log_size, errors_limit_perc):
@@ -175,12 +151,18 @@ def get_median(values):
         return values[mid_index]
 
 
-def get_statistics(logfile, config):
+def get_statistics(logfile):
     """Возвращает статистику по запросам"""
     data = {}
     count_total_req = 0
     request_time_sum = 0
-    for url, time in request_params(logfile, config):
+    total_rows_counter = 0
+    errors_counter = 0
+    for url, time in request_params(logfile):
+        total_rows_counter += 1
+        if url is None:
+            errors_counter += 1
+            continue
         count_total_req += 1
         request_time_sum += time
         if url not in data:
@@ -208,7 +190,7 @@ def get_statistics(logfile, config):
         val["time_med"] = round(get_median(values), ndigits=3)
         result.append(val)
 
-    return result
+    return result, total_rows_counter, errors_counter
 
 
 def is_report_exist(report_date, report_dir):
@@ -247,24 +229,31 @@ def create_report(content, logfile, config):
         report.write(content)
 
 
-def main(basic_config, config_file_path):
-    if not os.path.exists(config_file_path):
-        logging.error("Config file not fount")
-        sys.exit(ERROR_EXIT_STATUS)
-
-    with open(config_file_path, "r") as cf:
+def update_basic_config(basic_config, external_config_path):
+    """Обновляет базовую конфигурацию значениями из внешнего файла"""
+    with open(external_config_path, "r") as cf:
         content = cf.read()
         if content:
             new_config_params = json.loads(content)
             basic_config.update(new_config_params)
 
-    output_log_dir = basic_config.get("OUTPUT_LOG_DIR")
-    filename = None
+
+def main(basic_config, config_file_path):
+    if not os.path.exists(config_file_path):
+        logging.error("Config file not fount")
+        sys.exit(ERROR_EXIT_STATUS)
+
+    try:
+        update_basic_config(basic_config, config_file_path)
+    except json.decoder.JSONDecodeError:
+        logging.error("Can not parse config file")
+        sys.exit(ERROR_EXIT_STATUS)
+
     today = date.today()
-    if output_log_dir:
-        if not os.path.exists(output_log_dir):
-            os.makedirs(output_log_dir)
-        filename = os.path.join(output_log_dir, f"{today}.txt")
+    output_log_dir = basic_config["OUTPUT_LOG_DIR"]
+    if not os.path.exists(output_log_dir):
+        os.makedirs(output_log_dir)
+    filename = os.path.join(output_log_dir, f"{today}.txt")
 
     logging.basicConfig(format=LOG_FORMAT, datefmt=DATE_FMT, filename=filename, level=logging.INFO)
 
@@ -276,7 +265,11 @@ def main(basic_config, config_file_path):
         logging.info(f"Report is already exists")
         return
 
-    table_json = get_statistics(logfile, basic_config)
+    table_json, total_rows, errors_count = get_statistics(logfile)
+    errors_limit = get_errors_limit(total_rows, config["ERROR_LIMIT_PERC"])
+    if errors_count > errors_limit:
+        logging.error("Can not create report. Too much errors.")
+        sys.exit(ERROR_EXIT_STATUS)
     table_json.sort(key=lambda v: v["time_sum"], reverse=True)
     limit = basic_config["REPORT_SIZE"]
     content = render_template(table_json[:limit])

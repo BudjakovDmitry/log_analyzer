@@ -6,12 +6,17 @@ import shutil
 import os
 import random
 import unittest
+import json
 from unittest.mock import patch
 
 import log_analyzer
 
 
 TEST_CONFIG = {"key1": "value1", "key2": "value2", "key3": "value3"}
+Log = namedtuple("Log", ["name", "path", "date"])
+empty_log = Log(name=None, path=None, date=None)
+
+OK_EXIT_CODE = 0
 
 
 def get_random_date():
@@ -36,21 +41,25 @@ class TestDefaultConfig(unittest.TestCase):
         config = log_analyzer.config
         self.assertIsInstance(config, dict, msg="Incorrect config format")
 
-    def test_default_log_dir_is_present(self):
+    def test_default_params(self):
         config = log_analyzer.config
-        self.assertIn("LOG_DIR", config, msg="Default config has no 'LOG_DIR' parameter")
+        self.assertIn("REPORT_SIZE", config, msg="'REPORT_SIZE' not in default config")
+        self.assertIn("VALID_LOG_FORMATS", config, msg="'VALID_LOG_FORMATS' not in default config")
+        self.assertIn("REPORT_DIR", config, msg="'REPORT_DIR' not in default config")
+        self.assertIn("LOG_DIR", config, msg="'LOG_DIR' not in default config")
+        self.assertIn("OUTPUT_LOG_DIR", config, msg="'OUTPUT_LOG_DIR' not in default config")
+        self.assertIn("ERROR_LIMIT_PERC", config, msg="'ERROR_LIMIT_PERC' not in default config")
 
 
-class TestArgs(unittest.TestCase):
-    ERROR_EXIT_CODE = 1
+class TestExternalConfig(unittest.TestCase):
     default_config_file = "./config.json"
-    config_dir = "/tmp/log_analyzer/config"
+    config_dir = "/tmp/log_analyzer/test_external_config"
 
     def setUp(self):
         remove_dirs(self.config_dir)
         os.makedirs(self.config_dir)
 
-    def test_config(self):
+    def test_config_in_args(self):
         args = log_analyzer.args
         self.assertTrue(hasattr(args, "config"))
 
@@ -58,11 +67,35 @@ class TestArgs(unittest.TestCase):
         config_file = log_analyzer.args.config
         self.assertEqual(config_file, self.default_config_file)
 
-    def test_exit_err_if_conf_not_found(self):
+    def test_conf_not_found(self):
+        """Если файла конфигурации не существует, то падает с ошибкой"""
         config_file = os.path.join(self.config_dir, "not_existing_config.json")
         with self.assertRaises(SystemExit) as sys_exit:
             log_analyzer.main(TEST_CONFIG, config_file)
-        self.assertEqual(sys_exit.exception.code, self.ERROR_EXIT_CODE)
+        self.assertNotEqual(sys_exit.exception.code, OK_EXIT_CODE)
+
+    def test_config_is_not_valid(self):
+        """Если файл конфигурации не парсится, то падает с ошибкой"""
+        cfg_path = os.path.join(self.config_dir, "cfg.json")
+        with open(cfg_path, "w") as cfg:
+            cfg.write("invalid config format")
+
+        with self.assertRaises(SystemExit) as sys_exit:
+            log_analyzer.main(TEST_CONFIG, cfg_path)
+        self.assertNotEqual(sys_exit.exception.code, OK_EXIT_CODE)
+
+    def test_update_config(self):
+        log_analyzer.config = {"key1": "value1", "key2": "value2"}
+        external_config = {"key1": "value100", "key3": "value3"}
+        cfg_path = os.path.join(self.config_dir, "cfg.json")
+        with open(cfg_path, "w") as cfg:
+            cfg.write(json.dumps(external_config))
+        config = log_analyzer.config
+        log_analyzer.update_basic_config(config, cfg_path)
+        self.assertDictEqual(
+            config,
+            {"key1": "value100", "key2": "value2", "key3": "value3"}
+        )
 
 
 class TestValidLogFormat(unittest.TestCase):
@@ -128,9 +161,9 @@ class TestDateFromLogname(unittest.TestCase):
 
 
 class TestLatestLogFile(unittest.TestCase):
-    not_existing_dir = "/tmp/log_analyzer/not_existing"
-    empty_log_dir = "/tmp/log_analyzer/empty"
-    log_dir = "/tmp/log_analyzer/log_dir"
+    not_existing_dir = "/tmp/log_analyzer/test_latest_log_file/not_existing"
+    empty_log_dir = "/tmp/log_analyzer/test_latest_log_file/empty"
+    log_dir = "/tmp/log_analyzer/test_latest_log_file/log_dir"
 
     valid_formats = ["gz", "log"]
     log_map = {}
@@ -218,8 +251,8 @@ class TestGenerateReportName(unittest.TestCase):
 
 
 class TestIsReportExist(unittest.TestCase):
-    not_existing_report_dir = "/tmp/log_analyzer/not_existing_report_dir"
-    existing_report_dir = "/tmp/log_analyzer/report_dir"
+    not_existing_report_dir = "/tmp/log_analyzer/test_is_report_exist/not_existing_report_dir"
+    existing_report_dir = "/tmp/log_analyzer/test_is_report_exist/report_dir"
 
     def setUp(self):
         remove_dirs(self.not_existing_report_dir, self.existing_report_dir)
@@ -256,13 +289,15 @@ class TestIsReportExist(unittest.TestCase):
 
 
 class TestGetStatistic(unittest.TestCase):
-    patched_method = "log_analyzer.request_params"
+    request_params = "log_analyzer.request_params"
     assertion_delta = 1e-5
     mocked_requests = []
     route_counters = defaultdict(int)
     time_sum = defaultdict(int)
     time_values = defaultdict(list)
     total_requests_count = 0
+    total_rows_count = 0
+    errors_count = 0
     total_time_sum = 0
 
     def __new__(cls, *args, **kwargs):
@@ -272,6 +307,11 @@ class TestGetStatistic(unittest.TestCase):
 
         with open("./mocked_data/requests", "r") as requests:
             for row in requests:
+                cls.total_rows_count += 1
+                if row == "\n":
+                    cls.errors_count += 1
+                    cls.mocked_requests.append((None, None))
+                    continue
                 url, time = row.split()
                 time = float(time)
                 cls.route_counters[url] += 1
@@ -284,13 +324,13 @@ class TestGetStatistic(unittest.TestCase):
         return obj
 
     def test_split_by_url(self):
-        with patch(self.patched_method, return_value=self.mocked_requests):
-            result = log_analyzer.get_statistics(tuple(), {})
+        with patch(self.request_params, return_value=self.mocked_requests):
+            result, *_ = log_analyzer.get_statistics(tuple())
         self.assertEqual(len(result), len(self.route_counters.keys()))
 
     def test_count(self):
-        with patch(self.patched_method, return_value=self.mocked_requests):
-            result = log_analyzer.get_statistics(tuple(), {})
+        with patch(self.request_params, return_value=self.mocked_requests):
+            result, *_ = log_analyzer.get_statistics(tuple())
         for row in result:
             url = row["url"]
             expected_count = self.route_counters[url]
@@ -298,8 +338,8 @@ class TestGetStatistic(unittest.TestCase):
             self.assertEqual(expected_count, real_count)
 
     def test_count_perc(self):
-        with patch(self.patched_method, return_value=self.mocked_requests):
-            result = log_analyzer.get_statistics(tuple(), {})
+        with patch(self.request_params, return_value=self.mocked_requests):
+            result, *_ = log_analyzer.get_statistics(tuple())
         for row in result:
             url = row["url"]
             expected_perc = (self.route_counters[url] / self.total_requests_count) * 100
@@ -308,8 +348,8 @@ class TestGetStatistic(unittest.TestCase):
             self.assertEqual(expected_perc, real_perc)
 
     def test_time_sum(self):
-        with patch(self.patched_method, return_value=self.mocked_requests):
-            result = log_analyzer.get_statistics(tuple(), {})
+        with patch(self.request_params, return_value=self.mocked_requests):
+            result, *_ = log_analyzer.get_statistics(tuple())
         for row in result:
             url = row["url"]
             expected_time_sum = self.time_sum[url]
@@ -318,8 +358,8 @@ class TestGetStatistic(unittest.TestCase):
             self.assertLess(delta, self.assertion_delta)
 
     def test_time_perc(self):
-        with patch(self.patched_method, return_value=self.mocked_requests):
-            result = log_analyzer.get_statistics(tuple(), {})
+        with patch(self.request_params, return_value=self.mocked_requests):
+            result, *_ = log_analyzer.get_statistics(tuple())
         for row in result:
             url = row["url"]
             expected_time_perc = (self.time_sum[url] / self.total_time_sum) * 100
@@ -329,8 +369,8 @@ class TestGetStatistic(unittest.TestCase):
             self.assertLess(delta, self.assertion_delta)
 
     def test_time_avg(self):
-        with patch(self.patched_method, return_value=self.mocked_requests):
-            result = log_analyzer.get_statistics(tuple(), {})
+        with patch(self.request_params, return_value=self.mocked_requests):
+            result, *_ = log_analyzer.get_statistics(tuple())
         for row in result:
             url = row["url"]
             values = self.time_values[url]
@@ -340,8 +380,8 @@ class TestGetStatistic(unittest.TestCase):
             self.assertLess(delta, self.assertion_delta)
 
     def test_time_max(self):
-        with patch(self.patched_method, return_value=self.mocked_requests):
-            result = log_analyzer.get_statistics(tuple(), {})
+        with patch(self.request_params, return_value=self.mocked_requests):
+            result, *_ = log_analyzer.get_statistics(tuple())
         for row in result:
             url = row["url"]
             values = self.time_values[url]
@@ -351,8 +391,8 @@ class TestGetStatistic(unittest.TestCase):
             self.assertLess(delta, self.assertion_delta)
 
     def test_time_med(self):
-        with patch(self.patched_method, return_value=self.mocked_requests):
-            result = log_analyzer.get_statistics(tuple(), {})
+        with patch(self.request_params, return_value=self.mocked_requests):
+            result, *_ = log_analyzer.get_statistics(tuple())
         for row in result:
             url = row["url"]
             values = self.time_values[url]
@@ -368,6 +408,16 @@ class TestGetStatistic(unittest.TestCase):
             real_med = row["time_med"]
             delta = abs(expected_med - real_med)
             self.assertLess(delta, self.assertion_delta)
+
+    def test_total_rows_counter(self):
+        with patch(self.request_params, return_value=self.mocked_requests):
+            _, total_rows, _ = log_analyzer.get_statistics(tuple())
+        self.assertEqual(self.total_rows_count, total_rows)
+
+    def test_errors_counter(self):
+        with patch(self.request_params, return_value=self.mocked_requests):
+            *_, errors = log_analyzer.get_statistics(tuple())
+        self.assertEqual(self.errors_count, errors)
 
 
 class TestGetMediane(unittest.TestCase):
@@ -403,6 +453,21 @@ class TestGetMediane(unittest.TestCase):
         real_med = log_analyzer.get_median(even)
         delta = abs(expected_med - real_med)
         self.assertLess(delta, self.assertion_delta)
+
+
+class TestOpener(unittest.TestCase):
+    def test_gz(self):
+        opener = log_analyzer.get_opener("file.gz")
+        self.assertEqual(opener, gzip.open)
+
+    def test_open(self):
+        opener = log_analyzer.get_opener("file.log")
+        self.assertEqual(opener, open)
+
+
+class TestMain(unittest.TestCase):
+    def test_error_exit_code(self):
+        self.assertNotEqual(log_analyzer.ERROR_EXIT_STATUS, OK_EXIT_CODE)
 
 
 if __name__ == "__main__":
