@@ -16,12 +16,11 @@ import re
 import sys
 import traceback
 from collections import namedtuple
-from datetime import date
+from datetime import date, datetime
 from string import Template
 
 config = {
     "REPORT_SIZE": 1000,
-    "VALID_LOG_FORMATS": ["gz", "log"],
     "REPORT_DIR": "./reports",
     "LOG_DIR": "./log",
     "OUTPUT_LOG_DIR": "./",
@@ -32,6 +31,7 @@ LOG_FORMAT = "[%(asctime)s] %(levelname).1s %(message)s"
 DATE_FMT = "%Y.%m.%d %H:%M:%S"
 
 ERROR_EXIT_STATUS = 1
+LogFile = namedtuple("LogFile", ["name", "path", "date"])
 
 parser = argparse.ArgumentParser(description="Nginx logs analyzer")
 parser.add_argument("--config", default="./config.json", help="Path to json config file")
@@ -39,76 +39,46 @@ args = parser.parse_args()
 config_path = args.config
 
 
-def exception_handler(type, value, tb):
-    """Обработчик исключений"""
-    tb_formatted = traceback.format_exception(type, value, tb)
-    tb_str = "".join(tb_formatted)
-    msg = f"{type.__name__}: {value}\n{tb_str}"
-    logging.exception(msg, exc_info=False)
-
-
-sys.excepthook = exception_handler
-
-
-def is_ui_log(file_name):
-    """Проверяет, что данный лог является логом интерфейса"""
-    name = file_name.split(".")[0]
-    type_ = name.split("-")[-1]
-    return type_ == "ui"
-
-
-def is_valid_format(file_name, valid_formats):
-    """Проверяет, что лог имеет допустимое расширение"""
-    suf = file_name.split(".")[-1]
-    for ext in valid_formats:
-        if suf.startswith(ext):
-            return True
-
-    return False
-
-
 def get_date_from_log_name(log_name):
     """Вытаскивает дату создания из имени лога"""
     date_ = re.search(r"\d+", log_name).group()
-    year = date_[:4]
-    month = date_[4:6]
-    day = date_[6:]
-    return date(year=int(year), month=int(month), day=int(day))
+    dt = datetime.strptime(date_, "%Y%m%d")
+    return dt.date()
 
 
-def get_latest_log_file(log_dir, valid_formats):
+def get_latest_log_file(log_dir):
     """Просматривает папку с логами и находит самый свежий"""
-    Result = namedtuple("Result", ["name", "path", "date"])
-    result = Result(name=None, path=None, date=None)
-    empty_result = result
+    lf = LogFile(name=None, path=None, date=None)
+    empty = lf
     if not os.path.exists(log_dir):
-        return empty_result
+        return empty
 
     for name in os.listdir(log_dir):
         path = os.path.join(log_dir, name)
         if not os.path.isfile(path):
             continue
 
-        if not is_ui_log(name) or not is_valid_format(name, valid_formats):
+        match = re.match(r"^nginx-access-ui\.log-(?P<date>\d{8})(\.gz)?$", name)
+        if match is None:
             continue
 
-        if result.name is None:
-            result = Result(name=name, path=path, date=get_date_from_log_name(name))
+        if lf.name is None:
+            lf = LogFile(name=name, path=path, date=get_date_from_log_name(name))
             continue
 
         current_date = get_date_from_log_name(name)
-        if current_date > result.date:
-            result = Result(name=name, path=path, date=current_date)
+        if current_date > lf.date:
+            lf = LogFile(name=name, path=path, date=current_date)
 
-    if result.name is None:
-        return empty_result
+    if lf.name is None:
+        return empty
 
-    return result
+    return lf
 
 
 def get_opener(logname):
     """Объект для открытия файла лога"""
-    return gzip.open if logname.endswith("gz") else open
+    return gzip.open if logname.endswith(".gz") else open
 
 
 def request_params(logfile):
@@ -195,12 +165,10 @@ def get_statistics(logfile):
 
 def is_report_exist(report_date, report_dir):
     """Проверяет, существует ли отчет за указанную дату"""
-    if not os.path.exists(report_dir):
-        return False
     expected_name = generate_report_name(report_date)
-    for report in os.listdir(report_dir):
-        if report == expected_name:
-            return True
+    path = os.path.join(report_dir, expected_name)
+    if os.path.exists(path):
+        return True
     return False
 
 
@@ -229,13 +197,24 @@ def create_report(content, logfile, config):
         report.write(content)
 
 
-def update_basic_config(basic_config, external_config_path):
-    """Обновляет базовую конфигурацию значениями из внешнего файла"""
+def get_external_config(external_config_path):
+    """Получить конфигурацию из внешнего файла"""
     with open(external_config_path, "r") as cf:
-        content = cf.read()
-        if content:
-            new_config_params = json.loads(content)
-            basic_config.update(new_config_params)
+        cfg = json.load(cf)
+
+    return cfg if isinstance(cfg, dict) else {}
+
+
+def join_configs(basic_config, external_config):
+    """Объединяет базовыю конфигурацию и конфигурацию из внешнего файла в один конфиг"""
+    cfg = {}
+    for key, value in basic_config.items():
+        cfg[key] = value
+
+    for key, value in external_config.items():
+        cfg[key] = value
+
+    return cfg
 
 
 def main(basic_config, config_file_path):
@@ -244,24 +223,28 @@ def main(basic_config, config_file_path):
         sys.exit(ERROR_EXIT_STATUS)
 
     try:
-        update_basic_config(basic_config, config_file_path)
+        external_config = get_external_config(config_file_path)
     except json.decoder.JSONDecodeError:
         logging.error("Can not parse config file")
         sys.exit(ERROR_EXIT_STATUS)
+    else:
+        cfg = join_configs(basic_config, external_config)
 
     today = date.today()
-    output_log_dir = basic_config["OUTPUT_LOG_DIR"]
-    if not os.path.exists(output_log_dir):
-        os.makedirs(output_log_dir)
-    filename = os.path.join(output_log_dir, f"{today}.txt")
+    output_log_dir = cfg["OUTPUT_LOG_DIR"]
+    filename = None
+    if output_log_dir is not None:
+        if not os.path.exists(output_log_dir):
+            os.makedirs(output_log_dir)
+        filename = os.path.join(output_log_dir, f"{today}.txt")
 
     logging.basicConfig(format=LOG_FORMAT, datefmt=DATE_FMT, filename=filename, level=logging.INFO)
 
-    logfile = get_latest_log_file(basic_config["LOG_DIR"], basic_config["VALID_LOG_FORMATS"])
+    logfile = get_latest_log_file(cfg["LOG_DIR"])
     if logfile.name is None:
         logging.info("Nginx logs not found")
         return
-    if is_report_exist(logfile.date, basic_config["REPORT_DIR"]):
+    if is_report_exist(logfile.date, cfg["REPORT_DIR"]):
         logging.info(f"Report is already exists")
         return
 
@@ -271,10 +254,13 @@ def main(basic_config, config_file_path):
         logging.error("Can not create report. Too much errors.")
         sys.exit(ERROR_EXIT_STATUS)
     table_json.sort(key=lambda v: v["time_sum"], reverse=True)
-    limit = basic_config["REPORT_SIZE"]
+    limit = cfg["REPORT_SIZE"]
     content = render_template(table_json[:limit])
-    create_report(content, logfile, basic_config)
+    create_report(content, logfile, cfg)
 
 
 if __name__ == "__main__":
-    main(config, config_path)
+    try:
+        main(config, config_path)
+    except Exception as exc:
+        logging.exception(exc)
