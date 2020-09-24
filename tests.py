@@ -44,7 +44,6 @@ class TestDefaultConfig(unittest.TestCase):
     def test_default_params(self):
         config = log_analyzer.config
         self.assertIn("REPORT_SIZE", config, msg="'REPORT_SIZE' not in default config")
-        self.assertIn("VALID_LOG_FORMATS", config, msg="'VALID_LOG_FORMATS' not in default config")
         self.assertIn("REPORT_DIR", config, msg="'REPORT_DIR' not in default config")
         self.assertIn("LOG_DIR", config, msg="'LOG_DIR' not in default config")
         self.assertIn("OUTPUT_LOG_DIR", config, msg="'OUTPUT_LOG_DIR' not in default config")
@@ -84,65 +83,13 @@ class TestExternalConfig(unittest.TestCase):
             log_analyzer.main(TEST_CONFIG, cfg_path)
         self.assertNotEqual(sys_exit.exception.code, OK_EXIT_CODE)
 
-    def test_update_config(self):
-        log_analyzer.config = {"key1": "value1", "key2": "value2"}
-        external_config = {"key1": "value100", "key3": "value3"}
-        cfg_path = os.path.join(self.config_dir, "cfg.json")
-        with open(cfg_path, "w") as cfg:
-            cfg.write(json.dumps(external_config))
-        config = log_analyzer.config
-        log_analyzer.update_basic_config(config, cfg_path)
+    def test_join_config(self):
+        first = {"key1": "value1", "key2": "value2"}
+        second = {"key1": "value100", "key3": "value3"}
+        summary_config = log_analyzer.join_configs(first, second)
         self.assertDictEqual(
-            config,
-            {"key1": "value100", "key2": "value2", "key3": "value3"}
+            summary_config, {"key1": "value100", "key2": "value2", "key3": "value3"}
         )
-
-
-class TestValidLogFormat(unittest.TestCase):
-    valid_log_formats = ["gz", "log"]
-    name_gz = "some_log.log-20190305.gz"
-    name_log = "some_log.log-20190630"
-    name = "some_log"
-    name_bz2 = "some_log.bz2"
-
-    def test_gz(self):
-        res = log_analyzer.is_valid_format(self.name_gz, self.valid_log_formats)
-        self.assertTrue(res)
-
-    def test_log(self):
-        res = log_analyzer.is_valid_format(self.name_log, self.valid_log_formats)
-        self.assertTrue(res)
-
-    def test_empty(self):
-        res = log_analyzer.is_valid_format(self.name, self.valid_log_formats)
-        self.assertFalse(res)
-
-    def test_bz2(self):
-        res = log_analyzer.is_valid_format(self.name_bz2, self.valid_log_formats)
-        self.assertFalse(res)
-
-
-class TestIsUiLog(unittest.TestCase):
-    ui_log = "nginx-access-ui.log-20190312"
-    ui_gz = "nginx-access-ui.log-20200402.gz"
-    not_ui_log = "nginx-access-other.log-20180301"
-    not_ui_gz = "nginx-access-other.log-20200520.gz"
-
-    def test_affirmative(self):
-        res = log_analyzer.is_ui_log(self.ui_log)
-        self.assertTrue(res)
-
-    def test_affirmative_gz(self):
-        res = log_analyzer.is_ui_log(self.ui_gz)
-        self.assertTrue(res)
-
-    def test_negative(self):
-        res = log_analyzer.is_ui_log(self.not_ui_log)
-        self.assertFalse(res)
-
-    def test_negative_gz(self):
-        res = log_analyzer.is_ui_log(self.not_ui_gz)
-        self.assertFalse(res)
 
 
 class TestDateFromLogname(unittest.TestCase):
@@ -165,7 +112,6 @@ class TestLatestLogFile(unittest.TestCase):
     empty_log_dir = "/tmp/log_analyzer/test_latest_log_file/empty"
     log_dir = "/tmp/log_analyzer/test_latest_log_file/log_dir"
 
-    valid_formats = ["gz", "log"]
     log_map = {}
 
     def _create_logs(self, count=10, log_type="ui", is_gz=False):
@@ -194,14 +140,14 @@ class TestLatestLogFile(unittest.TestCase):
         self.log_map = {}
 
     def test_log_dir_is_not_exist(self):
-        log = log_analyzer.get_latest_log_file(self.not_existing_dir, self.valid_formats)
+        log = log_analyzer.get_latest_log_file(self.not_existing_dir)
         self.assertIsInstance(log, tuple)
         self.assertIsNone(log.name)
         self.assertIsNone(log.path)
         self.assertIsNone(log.date)
 
     def test_log_dir_is_empty(self):
-        log = log_analyzer.get_latest_log_file(self.empty_log_dir, self.valid_formats)
+        log = log_analyzer.get_latest_log_file(self.empty_log_dir)
         self.assertIsInstance(log, tuple)
         self.assertIsNone(log.name)
         self.assertIsNone(log.path)
@@ -209,7 +155,7 @@ class TestLatestLogFile(unittest.TestCase):
 
     def test_return_format(self):
         self._create_logs()
-        log = log_analyzer.get_latest_log_file(self.log_dir, self.valid_formats)
+        log = log_analyzer.get_latest_log_file(self.log_dir)
         self.assertIsInstance(log, tuple, msg="Incorrect return type")
 
     def test_latest_log(self):
@@ -226,7 +172,7 @@ class TestLatestLogFile(unittest.TestCase):
             path=os.path.join(self.log_dir, latest_log),
             date=latest_date,
         )
-        real_latest = log_analyzer.get_latest_log_file(self.log_dir, self.valid_formats)
+        real_latest = log_analyzer.get_latest_log_file(self.log_dir)
         self.assertEqual(expected_latest, real_latest, msg="Function return not latest log file")
 
 
@@ -463,6 +409,50 @@ class TestOpener(unittest.TestCase):
     def test_open(self):
         opener = log_analyzer.get_opener("file.log")
         self.assertEqual(opener, open)
+
+
+class TestGetExternalConfig(unittest.TestCase):
+    dir = "/tmp/log_analyzer/external_config"
+    valid = "valid.json"
+    invalid = "invalid.json"
+
+    def setUp(self):
+        remove_dirs(self.dir)
+        os.makedirs(self.dir)
+
+    def write_file(self, filename, content):
+        path = os.path.join(self.dir, filename)
+        with open(path, "w") as cfg:
+            cfg.write(content)
+
+    def test_valid_config(self):
+        expected = {"key1": "value1", "key2": "value2", "key3": "value3"}
+        content = json.dumps(expected)
+        self.write_file(self.valid, content)
+        path = os.path.join(self.dir, self.valid)
+        real = log_analyzer.get_external_config(path)
+        self.assertDictEqual(real, expected)
+
+    def test_decode_error(self):
+        content = "Wrong format"
+        self.write_file(self.invalid, content)
+        path = os.path.join(self.dir, self.invalid)
+        with self.assertRaises(json.decoder.JSONDecodeError):
+            log_analyzer.get_external_config(path)
+
+    def test_not_json(self):
+        content = str(42)
+        self.write_file(self.invalid, content)
+        path = os.path.join(self.dir, self.invalid)
+        real = log_analyzer.get_external_config(path)
+        self.assertDictEqual(real, {})
+
+    def test_empty_config(self):
+        content = ""
+        self.write_file(self.valid, content)
+        path = os.path.join(self.dir, self.valid)
+        with self.assertRaises(json.decoder.JSONDecodeError):
+            log_analyzer.get_external_config(path)
 
 
 class TestMain(unittest.TestCase):
