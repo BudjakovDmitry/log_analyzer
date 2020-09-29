@@ -7,6 +7,7 @@ import os
 import random
 import unittest
 import json
+from functools import partial
 from unittest.mock import patch
 
 import log_analyzer
@@ -69,9 +70,10 @@ class TestExternalConfig(unittest.TestCase):
     def test_conf_not_found(self):
         """Если файла конфигурации не существует, то падает с ошибкой"""
         config_file = os.path.join(self.config_dir, "not_existing_config.json")
-        with self.assertRaises(SystemExit) as sys_exit:
-            log_analyzer.main(TEST_CONFIG, config_file)
-        self.assertNotEqual(sys_exit.exception.code, OK_EXIT_CODE)
+        with self.assertRaises(FileNotFoundError) as file_error:
+            with self.assertRaises(SystemExit) as sys_exit:
+                log_analyzer.main(TEST_CONFIG, config_file)
+                self.assertNotEqual(sys_exit.exception.code, OK_EXIT_CODE)
 
     def test_config_is_not_valid(self):
         """Если файл конфигурации не парсится, то падает с ошибкой"""
@@ -79,9 +81,10 @@ class TestExternalConfig(unittest.TestCase):
         with open(cfg_path, "w") as cfg:
             cfg.write("invalid config format")
 
-        with self.assertRaises(SystemExit) as sys_exit:
-            log_analyzer.main(TEST_CONFIG, cfg_path)
-        self.assertNotEqual(sys_exit.exception.code, OK_EXIT_CODE)
+        with self.assertRaises(json.decoder.JSONDecodeError) as file_error:
+            with self.assertRaises(SystemExit) as sys_exit:
+                log_analyzer.main(TEST_CONFIG, cfg_path)
+                self.assertNotEqual(sys_exit.exception.code, OK_EXIT_CODE)
 
     def test_join_config(self):
         first = {"key1": "value1", "key2": "value2"}
@@ -90,21 +93,6 @@ class TestExternalConfig(unittest.TestCase):
         self.assertDictEqual(
             summary_config, {"key1": "value100", "key2": "value2", "key3": "value3"}
         )
-
-
-class TestDateFromLogname(unittest.TestCase):
-    log_name_gz = "nginx-access-ui.log-20170630.gz"
-    log_name_plain = "nginx-access-ui.log-20180421"
-
-    def test_gz(self):
-        real_date = log_analyzer.get_date_from_log_name(self.log_name_gz)
-        expected_date = datetime.date(year=2017, month=6, day=30)
-        self.assertEqual(real_date, expected_date)
-
-    def test_plain(self):
-        real_date = log_analyzer.get_date_from_log_name(self.log_name_plain)
-        expected_date = datetime.date(year=2018, month=4, day=21)
-        self.assertEqual(real_date, expected_date)
 
 
 class TestLatestLogFile(unittest.TestCase):
@@ -141,17 +129,11 @@ class TestLatestLogFile(unittest.TestCase):
 
     def test_log_dir_is_not_exist(self):
         log = log_analyzer.get_latest_log_file(self.not_existing_dir)
-        self.assertIsInstance(log, tuple)
-        self.assertIsNone(log.name)
-        self.assertIsNone(log.path)
-        self.assertIsNone(log.date)
+        self.assertIsNone(log)
 
     def test_log_dir_is_empty(self):
         log = log_analyzer.get_latest_log_file(self.empty_log_dir)
-        self.assertIsInstance(log, tuple)
-        self.assertIsNone(log.name)
-        self.assertIsNone(log.path)
-        self.assertIsNone(log.date)
+        self.assertIsNone(log)
 
     def test_return_format(self):
         self._create_logs()
@@ -404,7 +386,9 @@ class TestGetMediane(unittest.TestCase):
 class TestOpener(unittest.TestCase):
     def test_gz(self):
         opener = log_analyzer.get_opener("file.gz")
-        self.assertEqual(opener, gzip.open)
+        func = opener.func
+        self.assertEqual(func, gzip.open)
+        self.assertDictEqual(opener.keywords, {"mode": "rt"})
 
     def test_open(self):
         opener = log_analyzer.get_opener("file.log")

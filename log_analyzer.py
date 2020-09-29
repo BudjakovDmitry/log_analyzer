@@ -17,6 +17,7 @@ import sys
 import traceback
 from collections import namedtuple
 from datetime import date, datetime
+from functools import partial
 from string import Template
 
 config = {
@@ -39,19 +40,11 @@ args = parser.parse_args()
 config_path = args.config
 
 
-def get_date_from_log_name(log_name):
-    """Вытаскивает дату создания из имени лога"""
-    date_ = re.search(r"\d+", log_name).group()
-    dt = datetime.strptime(date_, "%Y%m%d")
-    return dt.date()
-
-
 def get_latest_log_file(log_dir):
     """Просматривает папку с логами и находит самый свежий"""
     lf = LogFile(name=None, path=None, date=None)
-    empty = lf
     if not os.path.exists(log_dir):
-        return empty
+        return None
 
     for name in os.listdir(log_dir):
         path = os.path.join(log_dir, name)
@@ -62,23 +55,28 @@ def get_latest_log_file(log_dir):
         if match is None:
             continue
 
+        date_str, gz = match.groups()
+        try:
+            date = datetime.strptime(date_str, "%Y%m%d").date()
+        except ValueError:
+            loging.info(f"Incorrect date format in log name: {name}")
+            continue
         if lf.name is None:
-            lf = LogFile(name=name, path=path, date=get_date_from_log_name(name))
+            lf = LogFile(name=name, path=path, date=date)
             continue
 
-        current_date = get_date_from_log_name(name)
-        if current_date > lf.date:
-            lf = LogFile(name=name, path=path, date=current_date)
+        if date > lf.date:
+            lf = LogFile(name=name, path=path, date=date)
 
     if lf.name is None:
-        return empty
+        return None
 
     return lf
 
 
 def get_opener(logname):
     """Объект для открытия файла лога"""
-    return gzip.open if logname.endswith(".gz") else open
+    return partial(gzip.open, mode="rt") if logname.endswith(".gz") else open
 
 
 def request_params(logfile):
@@ -86,17 +84,16 @@ def request_params(logfile):
     Генератор. На каждой итерации возвращает URL и время выполнения для каждой записи из файла лога
     """
     opener = get_opener(logfile.name)
-    with opener(logfile.path, "r") as file:
+    with opener(logfile.path, encoding="utf-8") as file:
         for row in file:
             url = time = None
-            request = row.decode(encoding="utf-8")
-            request_url = re.search(r"\"(GET|POST|PUT|HEAD|OPTIONS)\s\S+", request)
+            request_url = re.search(r"\"(GET|POST|PUT|HEAD|OPTIONS)\s\S+", row)
             if request_url is not None:
-                request_time = re.search(r"\s\d+\.\d+\s", request)
+                request_time = re.search(r"\s\d+\.\d+\s", row)
                 time = float(request_time.group())
                 url = request_url.group().split()[-1]
             else:
-                logging.info(f"Can not find url in request: {request.rstrip()}")
+                logging.info(f"Can not find url in request: {row.rstrip()}")
             yield url, time
 
 
@@ -167,10 +164,7 @@ def is_report_exist(report_date, report_dir):
     """Проверяет, существует ли отчет за указанную дату"""
     expected_name = generate_report_name(report_date)
     path = os.path.join(report_dir, expected_name)
-    if os.path.exists(path):
-        return True
-    return False
-
+    return os.path.exists(path)
 
 def render_template(table_json):
     """Создает шаблон отчета"""
@@ -210,25 +204,13 @@ def join_configs(basic_config, external_config):
     cfg = {}
     for key, value in basic_config.items():
         cfg[key] = value
-
-    for key, value in external_config.items():
-        cfg[key] = value
-
+    cfg.update(external_config)
     return cfg
 
 
 def main(basic_config, config_file_path):
-    if not os.path.exists(config_file_path):
-        logging.error("Config file not fount")
-        sys.exit(ERROR_EXIT_STATUS)
-
-    try:
-        external_config = get_external_config(config_file_path)
-    except json.decoder.JSONDecodeError:
-        logging.error("Can not parse config file")
-        sys.exit(ERROR_EXIT_STATUS)
-    else:
-        cfg = join_configs(basic_config, external_config)
+    external_config = get_external_config(config_file_path)
+    cfg = join_configs(basic_config, external_config)
 
     today = date.today()
     output_log_dir = cfg["OUTPUT_LOG_DIR"]
@@ -236,12 +218,12 @@ def main(basic_config, config_file_path):
     if output_log_dir is not None:
         if not os.path.exists(output_log_dir):
             os.makedirs(output_log_dir)
-        filename = os.path.join(output_log_dir, f"{today}.txt")
+        filename = os.path.join(output_log_dir, "log.txt")
 
     logging.basicConfig(format=LOG_FORMAT, datefmt=DATE_FMT, filename=filename, level=logging.INFO)
 
     logfile = get_latest_log_file(cfg["LOG_DIR"])
-    if logfile.name is None:
+    if logfile is None:
         logging.info("Nginx logs not found")
         return
     if is_report_exist(logfile.date, cfg["REPORT_DIR"]):
@@ -264,3 +246,4 @@ if __name__ == "__main__":
         main(config, config_path)
     except Exception as exc:
         logging.exception(exc)
+
